@@ -1,0 +1,7 @@
+pandas
+numpy
+scikit-learn
+scipy
+matplotlib
+ultralytics
+opencv-python-headless
