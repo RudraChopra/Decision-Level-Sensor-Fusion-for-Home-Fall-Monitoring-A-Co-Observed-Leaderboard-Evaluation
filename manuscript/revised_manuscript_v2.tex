@@ -1,0 +1,136 @@
+\documentclass[journal]{IEEEtran}
+
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{cite}
+\usepackage{hyperref}
+\usepackage{siunitx}
+
+\hypersetup{colorlinks=true, linkcolor=black, citecolor=black, urlcolor=blue}
+
+\title{Causal Multimodal Event Fusion for Fall Monitoring: Video-Pose, Depth, and Wearable Evaluation with External Sensor Replication}
+
+\author{Rudra~Chopra%
+\thanks{R. Chopra is an independent researcher in San Ramon, CA, USA. Replace with the correct institutional affiliation before submission. Email: rudrachopra023@gmail.com.}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Fall monitoring systems should be evaluated as alerting systems: a model must detect the fall event quickly while avoiding false alert episodes during normal activity. Frame-level fall labels that include the long post-fall lying state can reward posture classification rather than event detection. This paper introduces a corrected event-level evaluation for co-observed camera--wearable fall monitoring and tests it on the UR Fall Detection Dataset. Fall transition frames define the timely detection window, late post-fall lying frames are censored from frame-level training, and lying or transitional frames in activities of daily living are treated as hard negatives. We evaluate camera depth features, body-worn accelerometry, a modern RGB video-pose baseline using YOLOv8 pose, and causal multimodal fusion models under sequence-held-out cross-validation with train-only threshold tuning. The best three-stream model, a histogram-gradient boosting event forest over causal depth, wearable, and pose-motion features, detects all 30 UR falls with zero false alert episodes and median latency \SI{0.451}{s}. A second three-stream model, ExtraTrees, detects all falls with one false alert episode. Strong single-modality and two-modality baselines are lower: YOLO-pose ExtraTrees reaches event F1 0.881, and depth--wearable temporal ExtraTrees reaches event F1 0.918. External replication on the independent UMAFall dataset gives subject-held-out inertial trial F1 0.995 across 746 trials from 19 subjects. The results show that the corrected event target is separable on staged public data when causal multimodal features are used. They do not establish real-home deployment readiness, which still requires long continuous home recordings and real falls.
+\end{abstract}
+
+\begin{IEEEkeywords}
+fall detection, event detection, sensor fusion, YOLO pose, wearable sensing, depth camera, home monitoring
+\end{IEEEkeywords}
+
+\section{Introduction}
+Automatic fall monitoring is not merely a frame-classification problem. A useful system must raise an alert soon after a fall and must avoid repeatedly alarming during normal activity. This operational requirement is often weakened by benchmark labels that mark both the falling transition and the long post-fall lying period as positive. Such labels can reward recognition of a person lying down while failing to measure whether the fall event itself was detected.
+
+The distinction matters for multimodal fusion. A camera can infer lying posture from geometry, but an accelerometer worn on the body is most informative during impact and orientation change. After a person is lying still, the accelerometer may read approximately static gravity, which is also consistent with many non-fall states. A frame-level benchmark that treats quiet post-fall lying as positive therefore asks the wearable stream to solve a physically ill-posed task.
+
+This paper reformulates the problem as causal event detection. On UR Fall \cite{Kwolek2014UR,Kepski2018Event}, a fall is detected only if an alert episode overlaps the transition window from fall onset to shortly after first ground contact. Late post-fall lying frames are censored from frame-level training, and ADL lying or transitional frames are hard negatives. This target forces models to detect the event rather than the aftermath.
+
+The revised paper also addresses the major empirical gaps in the earlier version. It adds a modern RGB pose baseline using YOLOv8 pose \cite{Jocher2023Ultralytics}, evaluates stronger causal raw-feature models rather than only score-level logistic fusion, and adds external subject-held-out replication on UMAFall \cite{Casilari2017UMAFall}. The remaining limitation is fundamental rather than editorial: no public co-observed dataset used here contains long real-home recordings of older adults with naturally occurring falls, so the paper does not claim deployment readiness.
+
+\section{Related Work}
+Fall detection has been studied with wearable inertial sensors, RGB/depth cameras, ambient sensors, and multimodal combinations \cite{Mubashir2013Survey}. Wearable systems often use acceleration magnitude, orientation change, and impact dynamics; camera systems often use posture, motion, skeletons, or depth geometry. Multimodal fusion can combine raw signals, features, or decisions \cite{Atrey2010Fusion,Baltrusaitis2019Multimodal}; decision-level and ensemble methods are attractive when streams are asynchronous or independently deployed \cite{Dietterich2000Ensemble}.
+
+Evaluation remains a central weakness. Bagala et al. showed that accelerometer algorithms performing well on simulated falls can degrade substantially on real-world falls \cite{Bagala2012RealWorld}. FARSEEING was created to support real-world fall-signal sharing \cite{Klenk2016FARSEEING}. Reviews emphasize that false alarms over time and event-level behavior are more relevant to deployment than isolated sample accuracy \cite{Warrington2018Evaluation}.
+
+UR Fall provides synchronized depth and accelerometer data for the same fall events \cite{Kwolek2014UR,Kepski2018Event}. SisFall \cite{Sucerquia2017SisFall}, UP-Fall \cite{MartinezVillasenor2019UPFall}, and UMAFall \cite{Casilari2017UMAFall} broaden public evaluation but differ in modalities, labels, and event timing. We use UR for co-observed video/depth/wearable event evaluation and UMAFall for independent wearable-sensor replication.
+
+\section{Datasets}
+\subsection{UR Fall}
+UR Fall contains 30 fall sequences and 40 ADL sequences. The dataset provides frontal RGB videos, extracted frontal depth features, synchronized accelerometer files, and synchronization tables mapping camera frames to accelerometer time. Extracted depth features include bounding-box shape, occupancy, estimated height, distance to floor, and a floor-proximity statistic.
+
+The released posture labels are $-1$ for not lying, $0$ for temporary transition, and $1$ for lying on the ground. In the corrected event target, only transition frames in fall sequences define the positive event interval. ADL frames are negative even when their posture label is $0$ or $1$; this explicitly tests false alerts on non-fall transitions and lying.
+
+\subsection{UMAFall}
+UMAFall contains multisensor inertial traces from 19 subjects performing falls and ADLs in a separate environment \cite{Casilari2017UMAFall}. It does not provide fall-onset frame labels compatible with the UR event-latency protocol, so it is used for subject-held-out trial-level external replication rather than for latency measurement.
+
+\section{Methods}
+\subsection{Causal Feature Streams}
+Three causal streams are used on UR:
+\begin{itemize}
+  \item \textit{Depth}: the eight released depth-map features and their causal temporal differences and rolling summaries.
+  \item \textit{Wearable}: accelerometer magnitude and axis statistics over the previous \SI{500}{ms}, plus causal temporal summaries.
+  \item \textit{RGB pose}: YOLOv8n-pose keypoints extracted from the frontal RGB video, normalized by frame size, with causal pose-motion differences and rolling summaries.
+\end{itemize}
+No future frames or future accelerometer samples are used.
+
+\subsection{Models}
+We evaluate single-stream, two-stream, and three-stream models. Baselines include camera-only depth, wearable-only, score-level fusion, YOLO-pose logistic/ExtraTrees/HGB baselines, and temporal depth--wearable models. The main model is a causal multimodal event forest: histogram-gradient boosting over depth, wearable, and pose features. An ExtraTrees model over the same full feature set is used as a second high-capacity check.
+
+\subsection{Alert Episodes}
+A method produces a risk score per frame. A threshold $\theta$ and persistence length $K$ convert scores into active alert frames; adjacent active frames are merged into alert episodes, and episodes separated by at most \SI{1}{s} are merged. $\theta$ and $K\in\{1,2,3,5,8,12\}$ are selected only on training sequences by maximizing event F1, then minimizing false alerts, then minimizing latency.
+
+\section{Experimental Protocol}
+UR results use five-fold stratified grouped cross-validation by sequence. All frames in a sequence stay in the same fold. Threshold tuning uses inner out-of-fold scores on training sequences for the modern pose and fusion baselines, preventing train-fit scores from selecting operating points. The primary metrics are event precision, event recall, event F1, false alert episodes per hour of recorded non-fall time, and median detection latency. Confidence intervals are sequence bootstrap intervals.
+
+UMAFall results use subject-held-out grouped cross-validation. Each trial is represented by aggregate inertial features from all available sensor placements and modalities. Metrics are trial accuracy, precision, recall, F1, and AUROC.
+
+\section{Results}
+\subsection{UR Event Detection}
+Table~\ref{tab:ur} reports the corrected UR event benchmark. The full three-stream HGB model detects all falls with no false alert episodes. Full ExtraTrees also detects all falls, with one false alert episode. The strongest two-stream model, temporal ExtraTrees over depth and wearable features, detects 28 of 30 falls with three false alert episodes. The modern YOLO-pose baseline is competitive but below full multimodal fusion, detecting 26 of 30 falls with three false alert episodes.
+
+\begin{table*}[t]
+\centering
+\caption{UR Fall event-level results under sequence-held-out evaluation. FA/h is normalized by short recorded non-fall duration and should be interpreted only as within-benchmark alert burden.}
+\label{tab:ur}
+\begin{tabular}{lrrrrrr}
+\toprule
+Method & TP/30 & FP episodes & Event F1 & Event recall & FA/h & Median latency (s) \\
+\midrule
+Full depth+wearable+YOLO-pose HGB & 30 & 0 & 1.000 & 1.000 & 0.0 & 0.451 \\
+Full depth+wearable+YOLO-pose ExtraTrees & 30 & 1 & 0.984 & 1.000 & 11.1 & 0.434 \\
+Depth+wearable temporal ExtraTrees & 28 & 3 & 0.918 & 0.933 & 33.3 & 0.568 \\
+YOLO-pose ExtraTrees & 26 & 3 & 0.881 & 0.867 & 33.3 & 0.351 \\
+Depth+wearable temporal HGB & 29 & 7 & 0.879 & 0.967 & 77.7 & 0.534 \\
+Temporal logistic score fusion & 26 & 8 & 0.813 & 0.867 & 88.8 & 0.734 \\
+Camera depth only & 28 & 34 & 0.609 & 0.933 & 377.5 & 0.501 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+Sequence-bootstrap intervals for the full HGB model are degenerate at 1.000 for event F1 and recall because every sequence is classified correctly in the grouped test predictions. The ExtraTrees full model has event-F1 CI 0.945--1.000. These intervals should not be overread: they quantify uncertainty over UR sequences, not over unseen homes.
+
+\subsection{External UMAFall Replication}
+Table~\ref{tab:umafall} shows external subject-held-out trial results on UMAFall. A logistic inertial model reaches F1 0.995 and AUROC 1.000 over 746 trials from 19 subjects. Tree models are slightly lower. This result supports that the inertial event features are not only fitted to UR, although UMAFall remains staged and trial-level.
+
+\begin{table}[t]
+\centering
+\caption{UMAFall subject-held-out trial-level external replication.}
+\label{tab:umafall}
+\begin{tabular}{lrrrrr}
+\toprule
+Model & Accuracy & Precision & Recall & F1 & AUROC \\
+\midrule
+Logistic inertial & 0.997 & 1.000 & 0.990 & 0.995 & 1.000 \\
+Random forest & 0.971 & 1.000 & 0.894 & 0.944 & 0.999 \\
+HistGradientBoosting & 0.971 & 1.000 & 0.894 & 0.944 & 0.997 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion}
+The corrected event protocol changes the scientific story. Camera depth alone detects most falls but creates many alert episodes when ADL lying and transitional frames are treated as negatives. Wearable dynamics and video pose add event evidence that suppresses these posture-only false alerts. The full multimodal model is separable on UR because fall transitions have consistent causal signatures across depth geometry, body dynamics, and RGB pose motion.
+
+The perfect UR result is encouraging but not a clinical claim. UR is small, staged, and recorded in one lab. The external UMAFall result fixes the single-dataset problem for inertial recognition and shows strong subject-held-out generalization on a second public dataset, but it does not replace real-home evidence. The paper's strongest defensible claim is therefore: on staged public data, a corrected event-level target plus causal multimodal features eliminates the false-alert failures seen in frame-level posture baselines; deployment readiness remains unproven.
+
+\section{Threats to Validity}
+\textit{Staged falls remain staged.} Both UR and UMAFall contain emulated falls by volunteers. Real falls by older adults may involve furniture, partial recovery, slower collapse, occlusion, or atypical impact dynamics.
+
+\textit{No real-home deployment.} The experiments do not include long continuous residential monitoring, user cancellation behavior, sensor dropout, privacy constraints, caregiver workflow, or naturally occurring falls.
+
+\textit{Short ADL exposure.} UR's false-alert episodes per hour are normalized from short ADL clips. They compare methods on the same benchmark but are not estimates of false alerts per residential day.
+
+\textit{Dataset-specific separability.} The full UR model achieves perfect grouped-test performance, which may reflect strong separability of this staged benchmark. The result should be validated on additional co-observed datasets before making product or clinical claims.
+
+\section{Conclusion}
+This paper replaces frame-level fall scoring with event-level alert evaluation and adds causal multimodal features from depth, wearable accelerometry, and modern RGB pose. Under grouped evaluation on UR Fall, the full multimodal HGB model detects all 30 falls with zero false alert episodes and subsecond median latency. External UMAFall evaluation gives subject-held-out inertial trial F1 0.995. These results are substantially stronger than score-level fusion, but the conclusion remains appropriately bounded: the approach is highly effective on staged public benchmarks, while real-home deployment requires new long-duration co-observed data with naturally occurring falls.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
