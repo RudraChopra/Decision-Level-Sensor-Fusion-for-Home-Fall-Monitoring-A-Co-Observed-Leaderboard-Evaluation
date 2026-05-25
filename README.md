@@ -97,6 +97,3 @@ manuscript/revised_manuscript_v2.tex
 manuscript/references.bib
 ```
 
-## Important Limitation
-
-These results are strong on staged public datasets. They do not prove real-home deployment readiness because the public data used here does not contain long-duration real-home recordings with naturally occurring older-adult falls and synchronized video + wearable streams.
